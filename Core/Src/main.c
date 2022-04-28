@@ -44,6 +44,8 @@ enum AdcDmaState {
 #define DATA_SIZE 4096
 #define FULL_BUFFER_SIZE 8192
 #define SAMPLE_RATE 44100
+#define MAX_VALUE_FROM_ADC 0x0FFF
+#define HIGHEST_FREQUENCY_TO_KEEP 2400 // Hz
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,8 +62,11 @@ static uint32_t g_dacBuffer[FULL_BUFFER_SIZE];
 static arm_rfft_fast_instance_f32 g_fft;
 static float32_t g_fftInputBuffer[DATA_SIZE];
 static float32_t g_fftOutputBuffer[DATA_SIZE];
-/*static volatile uint32_t *g_inputBuffer;
-static volatile uint32_t *g_outputBuffer;*/
+static float32_t g_tmpBuffer[DATA_SIZE];
+
+static float32_t g_taperingWindow[DATA_SIZE];
+static float32_t g_inverseTaperingWindow[DATA_SIZE];
+static float32_t g_filteringWindow[DATA_SIZE];
 
 static volatile enum AdcDmaState g_adcDmaState = FILLING_FIRST_HALF;
 static volatile int g_isDspPerformed = 0;
@@ -79,18 +84,12 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	g_adcDmaState = FILLING_SECOND_HALF;
 	g_isDspPerformed = 0;
-
-	/*g_inputBuffer = &g_adcBuffer[0];
-	g_outputBuffer = &g_dacBuffer[DATA_SIZE];*/
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	g_adcDmaState = FILLING_FIRST_HALF;
 	g_isDspPerformed = 0;
-
-	/*g_inputBuffer = &g_adcBuffer[DATA_SIZE];
-	g_outputBuffer = &g_dacBuffer[0];*/
 }
 
 static void performDsp()
@@ -112,39 +111,59 @@ static void performDsp()
 		uint32_t currentDacIndex = __HAL_DMA_GET_COUNTER(hdac1.DMA_Handle1);
 
 		for (int i = 0; i < DATA_SIZE; i++) {
-			g_fftInputBuffer[i] = srcBuffer[i];
+			g_tmpBuffer[i] = srcBuffer[i];
 		}
+
+		arm_mult_f32(g_tmpBuffer, g_taperingWindow, g_fftInputBuffer, DATA_SIZE);
 
 		arm_rfft_fast_f32(&g_fft, g_fftInputBuffer, g_fftOutputBuffer, 0);
 
 		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_SET) {
-			int highestFrequencyToKeep = 2400;
+			arm_mult_f32(g_fftOutputBuffer, g_filteringWindow, g_fftInputBuffer, DATA_SIZE);
+			/*int highestFrequencyToKeep = 2400;
 			int numberOfBucketsToKeep = highestFrequencyToKeep * DATA_SIZE / (SAMPLE_RATE / 2);
-			/*numberOfBucketsToKeep /= 2;
-			numberOfBucketsToKeep *= 2;
-			numberOfBucketsToKeep++;*/
 			for (int i = 0; i < DATA_SIZE - numberOfBucketsToKeep; i++) {
 				g_fftOutputBuffer[DATA_SIZE - 1 - i] = 0;
-			}
+			}*/
 		}
 
-		arm_rfft_fast_f32(&g_fft, g_fftOutputBuffer, g_fftInputBuffer, 1);
+		arm_rfft_fast_f32(&g_fft, g_fftInputBuffer, g_tmpBuffer, 1);
 
-		for (int i = 0; i < DATA_SIZE; i++) {
-			srcBuffer[i] = g_fftInputBuffer[i];
-		}
+		arm_mult_f32(g_tmpBuffer, g_inverseTaperingWindow, g_fftInputBuffer, DATA_SIZE);
 
 		for (int i = 0; i < DATA_SIZE; i++) {
 			int dstDacIndex = currentDacIndex + DATA_SIZE + i;
 			if (dstDacIndex >= FULL_BUFFER_SIZE) {
 				dstDacIndex -= FULL_BUFFER_SIZE;
 			}
-			g_dacBuffer[dstDacIndex] = srcBuffer[i];
+			g_dacBuffer[dstDacIndex] = g_fftInputBuffer[i];
 		}
 	}
-	/*for (int i = 0; i < DATA_SIZE; i++) {
- 		g_outputBuffer[i] = g_inputBuffer[i];
-	}*/
+}
+
+static float32_t hammingWindowFunction(int n, int N) {
+	return 0.54 + 0.46 * cos(2 * M_PI  * n / N);
+}
+
+static void initTaperingWindow() {
+	for (int i = 0; i < DATA_SIZE; i++) {
+		g_taperingWindow[i] = hammingWindowFunction(i, DATA_SIZE);
+
+		g_inverseTaperingWindow[i] = 1 / g_taperingWindow[i];
+	}
+}
+
+static void initFilteringWindow() {
+	int filteringWindowSize = HIGHEST_FREQUENCY_TO_KEEP * (DATA_SIZE / 2) / (SAMPLE_RATE / 2);
+	for (int i = 0; i < DATA_SIZE / 2; i++) {
+		if (i < filteringWindowSize) {
+			g_filteringWindow[2 * i + 0] = hammingWindowFunction(i, filteringWindowSize);
+			g_filteringWindow[2 * i + 1] = g_filteringWindow[2 * i + 0];
+		} else {
+			g_filteringWindow[2 * i + 0] = 0;
+			g_filteringWindow[2 * i + 1] = 0;
+		}
+	}
 }
 /* USER CODE END 0 */
 
@@ -189,6 +208,9 @@ int main(void)
   HAL_DAC_Start_DMA(&hdac1, DAC1_CHANNEL_1, g_dacBuffer, FULL_BUFFER_SIZE, DAC_ALIGN_12B_R);
 
   arm_rfft_fast_init_f32(&g_fft, DATA_SIZE);
+
+  initTaperingWindow();
+  initFilteringWindow();
   /* USER CODE END 2 */
 
   /* Infinite loop */
