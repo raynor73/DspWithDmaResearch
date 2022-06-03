@@ -30,6 +30,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "arm_math.h"
+#include "fir.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,10 +44,8 @@ enum AdcDmaState {
 /* USER CODE BEGIN PD */
 #define DATA_SIZE 2048
 #define FULL_BUFFER_SIZE 4096
-#define DATA_SIZE_WITH_OVERLAPPING_REGION 4096
 #define SAMPLE_RATE 44100
 #define MAX_VALUE_FROM_ADC 0x0FFF
-#define HIGHEST_FREQUENCY_TO_KEEP 2400 // Hz
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,22 +56,14 @@ enum AdcDmaState {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static arm_fir_instance_f32 g_fir;
+static float32_t g_firState[FILTER_TAP_NUM + DATA_SIZE - 1];
+
 static uint32_t g_adcBuffer[FULL_BUFFER_SIZE];
 static uint32_t g_dacBuffer[FULL_BUFFER_SIZE];
 
-static arm_rfft_fast_instance_f32 g_fft;
-//static float32_t g_fftInputBuffer[DATA_SIZE];
-//static float32_t g_fftOutputBuffer[DATA_SIZE];
-//static float32_t g_tmpBuffer[DATA_SIZE];
-
-static float32_t g_fftInputBufferWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-static float32_t g_fftOutputBufferWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-static float32_t g_tmpBufferWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-static float32_t g_previousBufferWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-
-static float32_t g_taperingWindowWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-static float32_t g_inverseTaperingWindowWithOverlappingRegion[DATA_SIZE_WITH_OVERLAPPING_REGION];
-//static float32_t g_filteringWindow[DATA_SIZE];
+static float32_t g_inputBuffer[DATA_SIZE];
+static float32_t g_outputBuffer[DATA_SIZE];
 
 static volatile enum AdcDmaState g_adcDmaState = FILLING_FIRST_HALF;
 static volatile int g_isDspPerformed = 0;
@@ -98,15 +89,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 	g_isDspPerformed = 0;
 }
 
-static float32_t hanningFunction(int n, int N) {
-	float32_t sinValue = sin((M_PI * n) / N);
-	return sinValue * sinValue;
-}
-
-static float32_t hammingFunction(int n, int N) {
-	return 0.54 + 0.46 * cos(2 * M_PI  * n / N);
-}
-
 static void performDsp()
 {
 	if (!g_isDspPerformed) {
@@ -127,73 +109,16 @@ static void performDsp()
 
 
 
-		/*for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-			g_tmpBufferWithOverlappingRegion[i] = 0;
-		}
 		for (int i = 0; i < DATA_SIZE; i++) {
-			g_tmpBufferWithOverlappingRegion[i] = srcBuffer[i];
+			g_inputBuffer[i] = srcBuffer[i];
 		}
-
-		arm_mult_f32(
-				g_tmpBufferWithOverlappingRegion,
-				g_taperingWindowWithOverlappingRegion,
-				g_fftInputBufferWithOverlappingRegion,
-				DATA_SIZE_WITH_OVERLAPPING_REGION
-		);*/
-
-		for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-			g_fftInputBufferWithOverlappingRegion[i] = 0;
-		}
-		for (int i = 0; i < DATA_SIZE; i++) {
-			g_fftInputBufferWithOverlappingRegion[i] = srcBuffer[i];
-		}
-
-		arm_rfft_fast_f32(
-				&g_fft,
-				g_fftInputBufferWithOverlappingRegion,
-				g_fftOutputBufferWithOverlappingRegion,
-				0
-		);
 
 		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_SET) {
-			//arm_mult_f32(g_fftOutputBuffer, g_filteringWindow, g_fftInputBuffer, DATA_SIZE);
-
-			//371
-			for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION / 2; i++) {
-				//float32_t coeff = (1.0 + cos(2 * M_PI * ((float32_t) i / (DATA_SIZE_WITH_OVERLAPPING_REGION / 2)))) / 2.0 + 0.001;
-				float32_t coeff = (float32_t) i / DATA_SIZE_WITH_OVERLAPPING_REGION / 2;
-				g_fftOutputBufferWithOverlappingRegion[i * 2 + 0] *= coeff;
-				g_fftOutputBufferWithOverlappingRegion[i * 2 + 1] *= coeff;
+			arm_fir_f32(&g_fir, g_inputBuffer, g_outputBuffer, DATA_SIZE);
+		} else {
+			for (int i = 0; i < DATA_SIZE; i++) {
+				g_outputBuffer[i] = g_inputBuffer[i];
 			}
-			/*for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-				g_fftOutputBufferWithOverlappingRegion[i] *= 0.001;
-			}*/
-		}
-
-		arm_rfft_fast_f32(
-				&g_fft,
-				g_fftOutputBufferWithOverlappingRegion,
-				g_tmpBufferWithOverlappingRegion,
-				1
-		);
-
-		/*arm_mult_f32(
-				g_tmpBufferWithOverlappingRegion,
-				g_inverseTaperingWindowWithOverlappingRegion,
-				g_fftOutputBufferWithOverlappingRegion,
-				DATA_SIZE_WITH_OVERLAPPING_REGION
-		);*/
-		for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-			g_fftOutputBufferWithOverlappingRegion[i] = g_tmpBufferWithOverlappingRegion[i];
-		}
-
-
-		for (int i = 0; i < DATA_SIZE; i++) {
-			g_fftOutputBufferWithOverlappingRegion[i] += g_previousBufferWithOverlappingRegion[i + DATA_SIZE_WITH_OVERLAPPING_REGION];
-		}
-
-		for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-			g_previousBufferWithOverlappingRegion[i] = g_fftOutputBufferWithOverlappingRegion[i];
 		}
 
 
@@ -203,53 +128,10 @@ static void performDsp()
 			if (dstDacIndex >= FULL_BUFFER_SIZE) {
 				dstDacIndex -= FULL_BUFFER_SIZE;
 			}
-			g_dacBuffer[dstDacIndex] = g_fftOutputBufferWithOverlappingRegion[i];
+			g_dacBuffer[dstDacIndex] = g_outputBuffer[i];
 		}
 	}
 }
-
-static void initTaperingWindow(
-		float32_t* taperingWindow,
-		float32_t* inverseTaperingWindow,
-		int N
-) {
-	for (int i = 0; i < N; i++) {
-		taperingWindow[i] = hanningFunction(i, N);
-
-		inverseTaperingWindow[i] = 1 / taperingWindow[i];
-	}
-}
-
-/*static void initFilteringWindow(
-		float32_t filteringWindow,
-		int highestFrequencyToKeep,
-		int dataSize,
-		int sampleRate,
-) {
-	int filteringWindowSize = highestFrequencyToKeep * (dataSize / 2) / (sampleRate / 2);
-	for (int i = 0; i < dataSize / 2; i++) {
-		if (i < filteringWindowSize) {
-			filteringWindow[2 * i + 0] = hammingWindowFunction(i, filteringWindowSize);
-			filteringWindow[2 * i + 1] = filteringWindow[2 * i + 0];
-		} else {
-			filteringWindow[2 * i + 0] = 0;
-			filteringWindow[2 * i + 1] = 0;
-		}
-	}
-}*/
-
-/*static void initFilteringWindow() {
-	int filteringWindowSize = HIGHEST_FREQUENCY_TO_KEEP * (DATA_SIZE / 2) / (SAMPLE_RATE / 2);
-	for (int i = 0; i < DATA_SIZE / 2; i++) {
-		if (i < filteringWindowSize) {
-			g_filteringWindow[2 * i + 0] = hammingWindowFunction(i, filteringWindowSize);
-			g_filteringWindow[2 * i + 1] = g_filteringWindow[2 * i + 0];
-		} else {
-			g_filteringWindow[2 * i + 0] = 0;
-			g_filteringWindow[2 * i + 1] = 0;
-		}
-	}
-}*/
 /* USER CODE END 0 */
 
 /**
@@ -292,17 +174,7 @@ int main(void)
   HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, FULL_BUFFER_SIZE);
   HAL_DAC_Start_DMA(&hdac1, DAC1_CHANNEL_1, g_dacBuffer, FULL_BUFFER_SIZE, DAC_ALIGN_12B_R);
 
-  arm_rfft_fast_init_f32(&g_fft, DATA_SIZE_WITH_OVERLAPPING_REGION);
-
-  initTaperingWindow(
-		  g_taperingWindowWithOverlappingRegion,
-		  g_inverseTaperingWindowWithOverlappingRegion,
-		  DATA_SIZE_WITH_OVERLAPPING_REGION
-  );
-  for (int i = 0; i < DATA_SIZE_WITH_OVERLAPPING_REGION; i++) {
-	  g_previousBufferWithOverlappingRegion[i] = 0;
-  }
-  //initFilteringWindow();
+  arm_fir_init_f32(&g_fir, FILTER_TAP_NUM, filter_taps, g_firState, DATA_SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
