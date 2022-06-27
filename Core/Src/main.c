@@ -46,6 +46,7 @@ enum AdcDmaState {
 #define FULL_BUFFER_SIZE 4096
 #define SAMPLE_RATE 44100
 #define MAX_VALUE_FROM_ADC 0x0FFF
+#define NUMBER_OF_ADC_CHANNELS 2
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -59,7 +60,11 @@ enum AdcDmaState {
 static arm_fir_instance_f32 g_fir;
 static float32_t g_firState[FILTER_TAP_NUM + DATA_SIZE - 1];
 
-static uint32_t g_adcBuffer[FULL_BUFFER_SIZE];
+static uint32_t g_adcBuffer[NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE];
+
+static uint32_t g_iBuffer[DATA_SIZE];
+static uint32_t g_qBuffer[DATA_SIZE];
+
 static uint32_t g_dacBuffer[FULL_BUFFER_SIZE];
 
 static float32_t g_inputBuffer[DATA_SIZE];
@@ -94,23 +99,26 @@ static void performDsp()
 	if (!g_isDspPerformed) {
 		g_isDspPerformed = 1;
 
-		uint32_t *srcBuffer;
+		uint32_t currentDacIndex = __HAL_DMA_GET_COUNTER(hdac1.DMA_Handle1);
+
 		switch (g_adcDmaState) {
 		case FILLING_FIRST_HALF:
-			srcBuffer = &g_adcBuffer[DATA_SIZE];
+			for (int i = 0; i < DATA_SIZE; i++) {
+				g_iBuffer[i] = g_adcBuffer[NUMBER_OF_ADC_CHANNELS * DATA_SIZE + NUMBER_OF_ADC_CHANNELS * i];
+				g_qBuffer[i] = g_adcBuffer[NUMBER_OF_ADC_CHANNELS * DATA_SIZE + NUMBER_OF_ADC_CHANNELS * i + 1];
+			}
 			break;
 
 		case FILLING_SECOND_HALF:
-			srcBuffer = &g_adcBuffer[0];
+			for (int i = 0; i < DATA_SIZE; i++) {
+				g_iBuffer[i] = g_adcBuffer[NUMBER_OF_ADC_CHANNELS * i];
+				g_qBuffer[i] = g_adcBuffer[NUMBER_OF_ADC_CHANNELS * i + 1];
+			}
 			break;
 		}
 
-		uint32_t currentDacIndex = __HAL_DMA_GET_COUNTER(hdac1.DMA_Handle1);
-
-
-
 		for (int i = 0; i < DATA_SIZE; i++) {
-			g_inputBuffer[i] = srcBuffer[i];
+			g_inputBuffer[i] = g_qBuffer[i];
 		}
 
 		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_SET) {
@@ -171,7 +179,7 @@ int main(void)
   MX_DAC1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim6);
-  HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, FULL_BUFFER_SIZE);
+  HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE);
   HAL_DAC_Start_DMA(&hdac1, DAC1_CHANNEL_1, g_dacBuffer, FULL_BUFFER_SIZE, DAC_ALIGN_12B_R);
 
   arm_fir_init_f32(&g_fir, FILTER_TAP_NUM, filter_taps, g_firState, DATA_SIZE);
