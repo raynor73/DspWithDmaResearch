@@ -31,6 +31,7 @@
 /* USER CODE BEGIN Includes */
 #include "arm_math.h"
 #include "fir.h"
+#include "fir_coeffs_361Taps_44100_200_3000.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,13 +58,19 @@ enum AdcDmaState {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static arm_fir_instance_f32 g_fir;
-static float32_t g_firState[FILTER_TAP_NUM + DATA_SIZE - 1];
+static arm_fir_instance_f32 g_filterFir;
+static float32_t g_filterFirState[FILTER_TAP_NUM + DATA_SIZE - 1];
+
+static arm_fir_instance_f32 g_delayFir;
+static float32_t g_delayFirState[HILBERT_AND_DELAY_FILTERS_TAP_NUM + DATA_SIZE - 1];
+
+static arm_fir_instance_f32 g_hilbertFir;
+static float32_t g_hilbertFirState[HILBERT_AND_DELAY_FILTERS_TAP_NUM + DATA_SIZE - 1];
 
 static uint32_t g_adcBuffer[NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE];
 
-static uint32_t g_iBuffer[DATA_SIZE];
-static uint32_t g_qBuffer[DATA_SIZE];
+static float32_t g_iBuffer[DATA_SIZE];
+static float32_t g_qBuffer[DATA_SIZE];
 
 static uint32_t g_dacBuffer[FULL_BUFFER_SIZE];
 
@@ -117,15 +124,25 @@ static void performDsp()
 			break;
 		}
 
-		for (int i = 0; i < DATA_SIZE; i++) {
-			g_inputBuffer[i] = g_qBuffer[i];
-		}
+		/*for (int i = 0; i < DATA_SIZE; i++) {
+			g_inputBuffer[i] = g_iBuffer[i];
+		}*/
 
 		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_SET) {
-			arm_fir_f32(&g_fir, g_inputBuffer, g_outputBuffer, DATA_SIZE);
+			//arm_fir_f32(&g_delayFir, g_inputBuffer, g_outputBuffer, DATA_SIZE);
+			arm_fir_f32(&g_delayFir, g_iBuffer, g_inputBuffer, DATA_SIZE);
+			arm_fir_f32(&g_hilbertFir, g_qBuffer, g_iBuffer, DATA_SIZE);
+			arm_add_f32(g_inputBuffer, g_iBuffer, g_qBuffer, DATA_SIZE);
+			/*for (int i = 0; i < DATA_SIZE; i++) {
+				g_inputBuffer[i] = g_qBuffer[i] + g_outputBuffer[i];
+			}*/
+			/*for (int i = 0; i < DATA_SIZE; i++) {
+				g_outputBuffer[i] += MAX_VALUE_FROM_ADC / 2;
+			}*/
+			arm_fir_f32(&g_filterFir, g_qBuffer, g_outputBuffer, DATA_SIZE);
 		} else {
 			for (int i = 0; i < DATA_SIZE; i++) {
-				g_outputBuffer[i] = g_inputBuffer[i];
+				g_outputBuffer[i] = g_qBuffer[i];
 			}
 		}
 
@@ -182,7 +199,11 @@ int main(void)
   HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE);
   HAL_DAC_Start_DMA(&hdac1, DAC1_CHANNEL_1, g_dacBuffer, FULL_BUFFER_SIZE, DAC_ALIGN_12B_R);
 
-  arm_fir_init_f32(&g_fir, FILTER_TAP_NUM, filter_taps, g_firState, DATA_SIZE);
+  //delay_taps[84] = 1; // initialize delay FIR taps
+
+  arm_fir_init_f32(&g_filterFir, FILTER_TAP_NUM, filter_taps, g_filterFirState, DATA_SIZE);
+  arm_fir_init_f32(&g_delayFir, HILBERT_AND_DELAY_FILTERS_TAP_NUM, coeffs_delay_361, g_delayFirState, DATA_SIZE);
+  arm_fir_init_f32(&g_hilbertFir, HILBERT_AND_DELAY_FILTERS_TAP_NUM, coeffs_hilbert_361Taps_44100_200_3000, g_hilbertFirState, DATA_SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
