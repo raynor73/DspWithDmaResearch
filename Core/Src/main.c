@@ -22,6 +22,7 @@
 #include "dac.h"
 #include "dma.h"
 #include "eth.h"
+#include "i2c.h"
 #include "tim.h"
 #include "usart.h"
 #include "usb_otg.h"
@@ -29,9 +30,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
 #include "arm_math.h"
 #include "fir.h"
 #include "fir_coeffs_361Taps_44100_200_3000.h"
+#include "liquidcrystal_i2c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,11 +46,12 @@ enum AdcDmaState {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DATA_SIZE 2048
-#define FULL_BUFFER_SIZE 4096
+#define DATA_SIZE 4096
+#define FULL_BUFFER_SIZE 8192
 #define SAMPLE_RATE 44100
 #define MAX_VALUE_FROM_ADC 0x0FFF
 #define NUMBER_OF_ADC_CHANNELS 2
+#define FREQUENCY_STEP_VARIANTS 4
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -79,6 +83,12 @@ static float32_t g_outputBuffer[DATA_SIZE];
 
 static volatile enum AdcDmaState g_adcDmaState = FILLING_FIRST_HALF;
 static volatile int g_isDspPerformed = 0;
+
+static int g_frequencyStepIndex = 2;
+static long g_frequencySteps[FREQUENCY_STEP_VARIANTS] = { 10, 100, 1000, 10000 };
+static char *g_frequencyStepNames[FREQUENCY_STEP_VARIANTS] = { "10 Hz ", "100 Hz", "1 kHz ", "10 kHz" };
+
+static uint32_t g_frequency = 7200000;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,6 +109,30 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
 	g_adcDmaState = FILLING_FIRST_HALF;
 	g_isDspPerformed = 0;
+}
+
+static void renderUI()
+{
+	char string[17];
+
+	HD44780_SetCursor(0, 0);
+	memset(string, 0, sizeof(string));
+	sprintf(string, "Freq: %lu Hz", g_frequency);
+	HD44780_PrintStr(string);
+
+	HD44780_SetCursor(0, 1);
+	memset(string, 0, sizeof(string));
+	sprintf(string, "Step: %s", g_frequencyStepNames[g_frequencyStepIndex]);
+	HD44780_PrintStr(string);
+
+	/*g_lcd.setCursor(0, 0);
+	g_lcd.print("Freq: ");
+	g_lcd.print(g_frequency);
+	g_lcd.print(" Hz");
+
+	g_lcd.setCursor(0, 1);
+	g_lcd.print("Step: ");
+	g_lcd.print(g_frequencyStepNames[g_frequencyStepIndex]);*/
 }
 
 static void performDsp()
@@ -130,16 +164,24 @@ static void performDsp()
 
 		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) != GPIO_PIN_SET) {
 			//arm_fir_f32(&g_delayFir, g_inputBuffer, g_outputBuffer, DATA_SIZE);
+
 			arm_fir_f32(&g_delayFir, g_iBuffer, g_inputBuffer, DATA_SIZE);
 			arm_fir_f32(&g_hilbertFir, g_qBuffer, g_iBuffer, DATA_SIZE);
 			arm_add_f32(g_inputBuffer, g_iBuffer, g_qBuffer, DATA_SIZE);
+
 			/*for (int i = 0; i < DATA_SIZE; i++) {
 				g_inputBuffer[i] = g_qBuffer[i] + g_outputBuffer[i];
 			}*/
-			/*for (int i = 0; i < DATA_SIZE; i++) {
-				g_outputBuffer[i] += MAX_VALUE_FROM_ADC / 2;
-			}*/
+
 			arm_fir_f32(&g_filterFir, g_qBuffer, g_outputBuffer, DATA_SIZE);
+
+			for (int i = 0; i < DATA_SIZE; i++) {
+				g_outputBuffer[i] += MAX_VALUE_FROM_ADC / 2;
+			}
+
+			/*for (int i = 0; i < DATA_SIZE; i++) {
+				g_outputBuffer[i] = g_qBuffer[i];
+			}*/
 		} else {
 			for (int i = 0; i < DATA_SIZE; i++) {
 				g_outputBuffer[i] = g_qBuffer[i];
@@ -194,6 +236,7 @@ int main(void)
   MX_TIM6_Init();
   MX_ADC3_Init();
   MX_DAC1_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim6);
   HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE);
@@ -208,6 +251,10 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  HD44780_Init(2);
+  HD44780_Clear();
+
+  renderUI();
   while (1)
   {
     /* USER CODE END WHILE */
