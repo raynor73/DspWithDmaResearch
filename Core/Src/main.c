@@ -51,7 +51,16 @@ enum AdcDmaState {
 #define SAMPLE_RATE 44100
 #define MAX_VALUE_FROM_ADC 0x0FFF
 #define NUMBER_OF_ADC_CHANNELS 2
+
 #define FREQUENCY_STEP_VARIANTS 4
+#define MIN_FREQUENCY 5800000
+#define MAX_FREQUENCY 7600000
+
+#define ENCODER_SW_PIN GPIOG, GPIO_PIN_12
+#define ENCODER_DT_PIN GPIOE, GPIO_PIN_14
+#define ENCODER_CLK_PIN GPIOG, GPIO_PIN_14
+
+#define DEBOUNCE_DELAY 50 // milliseconds
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -89,6 +98,11 @@ static long g_frequencySteps[FREQUENCY_STEP_VARIANTS] = { 10, 100, 1000, 10000 }
 static char *g_frequencyStepNames[FREQUENCY_STEP_VARIANTS] = { "10 Hz ", "100 Hz", "1 kHz ", "10 kHz" };
 
 static uint32_t g_frequency = 7200000;
+
+static int g_lastEncoderSwitchLevel;
+static unsigned long g_lastEncoderSwitchLevelChangeTimestamp;
+static int g_lastEncoderClk;
+static int g_isEncoderRotatedCW;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -124,15 +138,68 @@ static void renderUI()
 	memset(string, 0, sizeof(string));
 	sprintf(string, "Step: %s", g_frequencyStepNames[g_frequencyStepIndex]);
 	HD44780_PrintStr(string);
+}
 
-	/*g_lcd.setCursor(0, 0);
-	g_lcd.print("Freq: ");
-	g_lcd.print(g_frequency);
-	g_lcd.print(" Hz");
+static void updateFrequencyStep() {
+	g_frequencyStepIndex++;
+	if (g_frequencyStepIndex >= FREQUENCY_STEP_VARIANTS) {
+		g_frequencyStepIndex = 0;
+	}
+}
 
-	g_lcd.setCursor(0, 1);
-	g_lcd.print("Step: ");
-	g_lcd.print(g_frequencyStepNames[g_frequencyStepIndex]);*/
+static void increaseFrequency() {
+	g_frequency += g_frequencySteps[g_frequencyStepIndex];
+	if (g_frequency > MAX_FREQUENCY) {
+		g_frequency = MAX_FREQUENCY;
+	}
+}
+
+static void decreaseFrequency() {
+	g_frequency -= g_frequencySteps[g_frequencyStepIndex];
+	if (g_frequency < MIN_FREQUENCY) {
+		g_frequency = MIN_FREQUENCY;
+	}
+}
+
+static void applyFrequency(uint32_t frequency) {
+	/*float requiredFrequencyMHz = frequency / 1e6f;
+	float divisor = BASE_FREQUENCY_MHZ / requiredFrequencyMHz;
+	int integerDivsor = divisor;
+	int divisible = (divisor - integerDivsor) * (float)DEFAULT_DIVISOR;
+	g_generator.setupMultisynth(1, SI5351_PLL_A, integerDivsor, divisible, DEFAULT_DIVISOR);*/
+}
+
+static void processInputAndUpdateUiIfNecessary() {
+	int encoderSwitchLevel = HAL_GPIO_ReadPin(ENCODER_SW_PIN);
+	unsigned long currentTimestamp = HAL_GetTick();
+
+	if (encoderSwitchLevel != g_lastEncoderSwitchLevel && (currentTimestamp - g_lastEncoderSwitchLevelChangeTimestamp) > DEBOUNCE_DELAY) {
+		g_lastEncoderSwitchLevel = encoderSwitchLevel;
+		g_lastEncoderSwitchLevelChangeTimestamp = currentTimestamp;
+		if (encoderSwitchLevel == GPIO_PIN_SET) {
+			updateFrequencyStep();
+			renderUI();
+		}
+	}
+
+	int encoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
+	int encoderDt = HAL_GPIO_ReadPin(ENCODER_DT_PIN);
+	if (encoderClk != g_lastEncoderClk) {
+		if (encoderClk == GPIO_PIN_RESET) {
+			g_isEncoderRotatedCW = encoderDt != encoderClk;
+		} else {
+			if (g_isEncoderRotatedCW) {
+				increaseFrequency();
+			} else {
+				decreaseFrequency();
+			}
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+
+		g_lastEncoderClk = encoderClk;
+	}
 }
 
 static void performDsp()
@@ -251,6 +318,10 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  g_lastEncoderSwitchLevel = HAL_GPIO_ReadPin(ENCODER_SW_PIN);
+  g_lastEncoderSwitchLevelChangeTimestamp = HAL_GetTick();
+  g_lastEncoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
+
   HD44780_Init(2);
   HD44780_Clear();
 
@@ -260,6 +331,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  processInputAndUpdateUiIfNecessary();
 	  performDsp();
   }
   /* USER CODE END 3 */
