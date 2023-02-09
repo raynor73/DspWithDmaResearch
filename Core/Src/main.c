@@ -35,6 +35,7 @@
 #include "fir.h"
 #include "fir_coeffs_361Taps_44100_200_3000.h"
 #include "liquidcrystal_i2c.h"
+#include "si5351.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,6 +62,8 @@ enum AdcDmaState {
 #define ENCODER_CLK_PIN GPIOG, GPIO_PIN_14
 
 #define DEBOUNCE_DELAY 50 // milliseconds
+
+#define SI5351_CORRECTION 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -162,11 +165,15 @@ static void decreaseFrequency() {
 }
 
 static void applyFrequency(uint32_t frequency) {
-	/*float requiredFrequencyMHz = frequency / 1e6f;
-	float divisor = BASE_FREQUENCY_MHZ / requiredFrequencyMHz;
-	int integerDivsor = divisor;
-	int divisible = (divisor - integerDivsor) * (float)DEFAULT_DIVISOR;
-	g_generator.setupMultisynth(1, SI5351_PLL_A, integerDivsor, divisible, DEFAULT_DIVISOR);*/
+	si5351PLLConfig_t si5351PllConfig;
+	si5351OutputConfig_t si5351outputConfig;
+
+	si5351_CalcIQ(g_frequency, &si5351PllConfig, &si5351outputConfig);
+
+	uint8_t phaseOffset = (uint8_t) si5351outputConfig.div;
+	si5351_SetupOutput(0, SI5351_PLL_A, SI5351_DRIVE_STRENGTH_4MA, &si5351outputConfig, 0);
+	si5351_SetupOutput(2, SI5351_PLL_A, SI5351_DRIVE_STRENGTH_4MA, &si5351outputConfig, phaseOffset);
+	si5351_SetupPLL(SI5351_PLL_A, &si5351PllConfig);
 }
 
 static void processInputAndUpdateUiIfNecessary() {
@@ -318,6 +325,40 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  si5351_Init(SI5351_CORRECTION);
+
+  si5351PLLConfig_t si5351PllConfig;
+  si5351OutputConfig_t si5351outputConfig;
+
+  si5351_CalcIQ(g_frequency, &si5351PllConfig, &si5351outputConfig);
+  /*
+   * `phaseOffset` is a 7bit value, calculated from Fpll, Fclk and desired phase shift.
+   * To get N° phase shift the value should be round( (N/360)*(4*Fpll/Fclk) )
+   * Two channels should use the same PLL to make it work. There are other restrictions.
+   * Please see AN619 for more details.
+   *
+   * si5351_CalcIQ() chooses PLL and MS parameters so that:
+   *   Fclk in [1.4..100] MHz
+   *   out_conf.div in [9..127]
+   *   out_conf.num = 0
+   *   out_conf.denum = 1
+   *   Fpll = out_conf.div * Fclk.
+   * This automatically gives 90° phase shift between two channels if you pass
+   * 0 and out_conf.div as a phaseOffset for these channels.
+   */
+  uint8_t phaseOffset = (uint8_t) si5351outputConfig.div;
+  si5351_SetupOutput(0, SI5351_PLL_A, SI5351_DRIVE_STRENGTH_4MA, &si5351outputConfig, 0);
+  si5351_SetupOutput(2, SI5351_PLL_A, SI5351_DRIVE_STRENGTH_4MA, &si5351outputConfig, phaseOffset);
+
+  /*
+   * The order is important! Setup the channels first, then setup the PLL.
+   * Alternatively you could reset the PLL after setting up PLL and channels.
+   * However since _SetupPLL() always resets the PLL this would only cause
+   * sending extra I2C commands.
+   */
+  si5351_SetupPLL(SI5351_PLL_A, &si5351PllConfig);
+  si5351_EnableOutputs((1<<0) | (1<<2));
+
   g_lastEncoderSwitchLevel = HAL_GPIO_ReadPin(ENCODER_SW_PIN);
   g_lastEncoderSwitchLevelChangeTimestamp = HAL_GetTick();
   g_lastEncoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
