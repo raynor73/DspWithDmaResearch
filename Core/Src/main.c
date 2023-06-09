@@ -104,8 +104,9 @@ static uint32_t g_frequency = 7200000;
 
 static int g_lastEncoderSwitchLevel;
 static unsigned long g_lastEncoderSwitchLevelChangeTimestamp;
-static int g_lastEncoderClk;
-static int g_isEncoderRotatedCW;
+static int g_lastEncoderClk = GPIO_PIN_RESET;
+static int g_lastEncoderDt = GPIO_PIN_RESET;
+//static int g_isEncoderRotatedCW;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -191,22 +192,73 @@ static void processInputAndUpdateUiIfNecessary() {
 
 	int encoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
 	int encoderDt = HAL_GPIO_ReadPin(ENCODER_DT_PIN);
-	if (encoderClk != g_lastEncoderClk) {
-		if (encoderClk == GPIO_PIN_RESET) {
-			g_isEncoderRotatedCW = encoderDt != encoderClk;
-		} else {
-			if (g_isEncoderRotatedCW) {
-				increaseFrequency();
-			} else {
-				decreaseFrequency();
-			}
+
+	if (g_lastEncoderClk == GPIO_PIN_RESET && g_lastEncoderDt == GPIO_PIN_SET) {
+		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_RESET) {
+			increaseFrequency();
 
 			applyFrequency(g_frequency);
 			renderUI();
 		}
 
-		g_lastEncoderClk = encoderClk;
+		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_SET) {
+			decreaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
 	}
+
+	if (g_lastEncoderClk == GPIO_PIN_SET && g_lastEncoderDt == GPIO_PIN_RESET) {
+		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_SET) {
+			increaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+
+		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_RESET) {
+			decreaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+	}
+
+	if (g_lastEncoderClk == GPIO_PIN_SET && g_lastEncoderDt == GPIO_PIN_SET) {
+		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_SET) {
+			increaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+
+		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_RESET) {
+			decreaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+	}
+
+	if (g_lastEncoderClk == GPIO_PIN_RESET && g_lastEncoderDt == GPIO_PIN_RESET) {
+		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_RESET) {
+			increaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+
+		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_SET) {
+			decreaseFrequency();
+
+			applyFrequency(g_frequency);
+			renderUI();
+		}
+	}
+
+	g_lastEncoderClk = encoderClk;
+	g_lastEncoderDt = encoderDt;
 }
 
 static void performDsp()
