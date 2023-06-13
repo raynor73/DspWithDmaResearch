@@ -58,9 +58,6 @@ enum AdcDmaState {
 #define MAX_FREQUENCY 7600000
 
 #define ENCODER_SW_PIN GPIOG, GPIO_PIN_12
-#define ENCODER_DT_PIN GPIOE, GPIO_PIN_14
-#define ENCODER_CLK_PIN GPIOG, GPIO_PIN_14
-
 #define DEBOUNCE_DELAY 50 // milliseconds
 
 #define SI5351_CORRECTION 0
@@ -104,9 +101,9 @@ static uint32_t g_frequency = 7200000;
 
 static int g_lastEncoderSwitchLevel;
 static unsigned long g_lastEncoderSwitchLevelChangeTimestamp;
-static int g_lastEncoderClk = GPIO_PIN_RESET;
-static int g_lastEncoderDt = GPIO_PIN_RESET;
-//static int g_isEncoderRotatedCW;
+
+static int16_t g_lastEncoderCounter = 0;
+static int g_shouldApplyFrequency = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -190,75 +187,11 @@ static void processInputAndUpdateUiIfNecessary() {
 		}
 	}
 
-	int encoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
-	int encoderDt = HAL_GPIO_ReadPin(ENCODER_DT_PIN);
-
-	if (g_lastEncoderClk == GPIO_PIN_RESET && g_lastEncoderDt == GPIO_PIN_SET) {
-		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_RESET) {
-			increaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-
-		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_SET) {
-			decreaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
+	if (g_shouldApplyFrequency) {
+		g_shouldApplyFrequency = 0;
+		applyFrequency(g_frequency);
+		renderUI();
 	}
-
-	if (g_lastEncoderClk == GPIO_PIN_SET && g_lastEncoderDt == GPIO_PIN_RESET) {
-		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_SET) {
-			increaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-
-		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_RESET) {
-			decreaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-	}
-
-	if (g_lastEncoderClk == GPIO_PIN_SET && g_lastEncoderDt == GPIO_PIN_SET) {
-		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_SET) {
-			increaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-
-		if (encoderClk == GPIO_PIN_RESET && encoderDt == GPIO_PIN_RESET) {
-			decreaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-	}
-
-	if (g_lastEncoderClk == GPIO_PIN_RESET && g_lastEncoderDt == GPIO_PIN_RESET) {
-		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_RESET) {
-			increaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-
-		if (encoderClk == GPIO_PIN_SET && encoderDt == GPIO_PIN_SET) {
-			decreaseFrequency();
-
-			applyFrequency(g_frequency);
-			renderUI();
-		}
-	}
-
-	g_lastEncoderClk = encoderClk;
-	g_lastEncoderDt = encoderDt;
 }
 
 static void performDsp()
@@ -325,6 +258,25 @@ static void performDsp()
 		}
 	}
 }
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+	int16_t encoderCounter = (int16_t) __HAL_TIM_GET_COUNTER(htim);
+
+	if (encoderCounter > g_lastEncoderCounter) {
+		decreaseFrequency();
+
+		g_lastEncoderCounter = encoderCounter;
+
+		g_shouldApplyFrequency = 1;
+	} else if (encoderCounter < g_lastEncoderCounter) {
+		increaseFrequency();
+
+		g_lastEncoderCounter = encoderCounter;
+
+		g_shouldApplyFrequency = 1;
+	}
+}
 /* USER CODE END 0 */
 
 /**
@@ -355,15 +307,17 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ETH_Init();
+  MX_DMA_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_HS_USB_Init();
-  MX_DMA_Init();
+  MX_ETH_Init();
   MX_TIM6_Init();
   MX_ADC3_Init();
   MX_DAC1_Init();
   MX_I2C2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Encoder_Start_IT(&htim3, TIM_CHANNEL_ALL);
   HAL_TIM_Base_Start(&htim6);
   HAL_ADC_Start_DMA(&hadc3, g_adcBuffer, NUMBER_OF_ADC_CHANNELS * FULL_BUFFER_SIZE);
   HAL_DAC_Start_DMA(&hdac1, DAC1_CHANNEL_1, g_dacBuffer, FULL_BUFFER_SIZE, DAC_ALIGN_12B_R);
@@ -413,7 +367,6 @@ int main(void)
 
   g_lastEncoderSwitchLevel = HAL_GPIO_ReadPin(ENCODER_SW_PIN);
   g_lastEncoderSwitchLevelChangeTimestamp = HAL_GetTick();
-  g_lastEncoderClk = HAL_GPIO_ReadPin(ENCODER_CLK_PIN);
 
   HD44780_Init(2);
   HD44780_Clear();
