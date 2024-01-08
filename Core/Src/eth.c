@@ -38,7 +38,7 @@ ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecr
 ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
 
 #endif
-
+ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT * 2U];
 ETH_TxPacketConfig TxConfig;
 
 /* USER CODE BEGIN 0 */
